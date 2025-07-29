@@ -1,45 +1,32 @@
-# logger.py
-"""
-Configuração do sistema de logging para o projeto.
-
-Este módulo centraliza a configuração do logger, permitindo que outros
-módulos (main, fn, strategies) importem e utilizem uma instância
-consistente para registrar mensagens de informação, avisos e erros.
-"""
 import logging
-import sys
 
-def setup_logger():
-    """
-    Configura e retorna uma instância do logger.
+class ColoredFormatter(logging.Formatter):
+    COLORS = {
+        'DEBUG': '\033[94m',
+        'INFO': '\033[92m',
+        'WARNING': '\033[93m',
+        'ERROR': '\033[91m',
+        'CRITICAL': '\033[95m',
+        'RESET': '\033[0m',
+    }
 
-    O logger é configurado para exibir mensagens no console com um formato
-    padronizado, incluindo data, nível da mensagem e o conteúdo.
+    def format(self, record):
+        log_color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
+        message = super().format(record)
+        return f'{log_color}{message}{self.COLORS["RESET"]}'
 
-    Returns:
-        logging.Logger: Instância do logger configurado.
-    """
-    # Cria um logger com o nome 'portfolio_research'.
-    logger = logging.getLogger('portfolio_research')
-    logger.setLevel(logging.INFO) # Define o nível mínimo de log a ser exibido.
 
-    # Evita adicionar múltiplos handlers se a função for chamada mais de uma vez.
-    if not logger.handlers:
-        # Cria um handler para direcionar os logs para a saída padrão (console).
-        stream_handler = logging.StreamHandler(sys.stdout)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.handlers = []
 
-        # Define o formato das mensagens de log.
-        formatter = logging.Formatter(
-            '%(asctime)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        stream_handler.setFormatter(formatter)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+formatter = ColoredFormatter(
+    '{asctime} - {levelname} - {message}',
+    style='{',
+    datefmt='%Y-%m-%d %H:%M',
+)
 
-        # Adiciona o handler ao logger.
-        logger.addHandler(stream_handler)
-
-    return logger
-
-# Instancia o logger para ser importado por outros módulos.
-log = setup_logger()
-
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
