@@ -11,3 +11,39 @@ dependencies = [
     "seaborn>=0.13.2",
     "yfinance>=0.2.65",
 ]
+
+
+[tool.taskipy.tasks]
+lint = 'ruff check'
+pre_format = 'ruff check --fix'
+black_format = 'black .'
+format = 'ruff format'
+pre_test = 'task lint'
+test = 'pytest -s -x --cov=simda -v'
+post_test = 'coverage html'
+
+[tool.ruff]
+line-length = 79
+
+[tool.ruff.lint]
+preview = true
+select = ['I', 'F', 'E', 'W', 'PL', 'PT']
+ignore = ['E402', 'F811']
+
+[tool.ruff.format]
+preview = true
+quote-style = 'single'
+
+[tool.black]
+line-length = 79
+
+[tool.pytest.ini_options]
+pythonpath = "."
+addopts = '-p no:warnings'
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "ruff>=0.12.7",
+    "taskipy>=1.14.1",
+]

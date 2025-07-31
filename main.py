@@ -1,16 +1,14 @@
-from matplotlib import pyplot as plt
-
-from fn import (
-    get_etfs_tickers,
-    get_unique_values_from_column,
-    merge_bdis
-)
 from pathlib import Path
 
+from matplotlib import pyplot as plt
+
+from fn import get_etfs_tickers, get_unique_values_from_column, merge_bdis
 
 etfs_tickers = get_etfs_tickers(path=Path('data/FundosListados.csv'))
 
-tickers = get_unique_values_from_column(df=etfs_tickers, column_name='Codigo Negociacao')
+tickers = get_unique_values_from_column(
+    df=etfs_tickers, column_name='Codigo Negociacao'
+)
 
 print(etfs_tickers.head())
 print(tickers)
