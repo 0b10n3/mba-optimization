@@ -1,121 +1,102 @@
 import pandas as pd
-import yfinance as yf
-from typing import List
-from logger import log
+from typing import List, Union, Tuple, Dict
+from logger import logger
+from pathlib import Path
 
 
-def get_market_data(tickers: List[str], start_date: str, end_date: str) -> pd.DataFrame:
-    """
-    Busca dados históricos de preços de fechamento ajustados do Yahoo Finance.
+def get_etfs_tickers(path: Path) -> Union[pd.DataFrame, None]:
 
-    Args:
-        tickers (List[str]): Lista de tickers dos ativos.
-        start_date (str): Data de início no formato 'YYYY-MM-DD'.
-        end_date (str): Data de fim no formato 'YYYY-MM-DD'.
-
-    Returns:
-        pd.DataFrame: DataFrame com os preços de fechamento ajustados,
-                      onde cada coluna corresponde a um ticker.
-                      Retorna um DataFrame vazio em caso de erro.
-    """
-    log.info(f"Buscando dados de mercado para {len(tickers)} ativos de {start_date} a {end_date}.")
     try:
-
-        data = yf.download(tickers, start=start_date, end=end_date, progress=False, auto_adjust=True)
-
-
-        if len(tickers) == 1:
-            prices = data[['Close']]
-            prices.columns = tickers
-        else:
-            prices = data['Close']
-
-        if prices.empty:
-            log.warning("O DataFrame de preços retornado pelo yfinance está vazio.")
+        logger.info(f"Reading ETFs tickers and metadata from {str(path)}.")
+        etfs_tickers = pd.read_csv(path)
+        if etfs_tickers.empty:
+            logger.warning("No data in {str(path)}. Returning empty dataframe.")
             return pd.DataFrame()
+    except FileNotFoundError as _err:
+        logger.error(f"File not found: {str(path)}. Please check the path and try again.")
+        return None
+
+    return etfs_tickers
 
 
-        missing_tickers = set(tickers) - set(prices.columns)
-        if missing_tickers:
-            log.warning(f"Não foi possível obter dados para todos os tickers. Ausentes: {', '.join(missing_tickers)}")
-            return pd.DataFrame()
+def get_unique_values_from_column(df: pd.DataFrame, column_name: str) -> List[str]:
 
-        prices.dropna(inplace=True)
-        log.info(f"Dados obtidos com sucesso. {len(prices)} pregões válidos encontrados.")
-        return prices
+      if column_name not in df.columns:
+        logger.error('Colunm not found in DataFrame.')
+        return []
 
-    except Exception as e:
-        log.error(f"Ocorreu um erro ao buscar os dados de mercado: {e}")
-        return pd.DataFrame()
-    
-    
-
-def get_stock_date_range(tickers):
-    """
-    Get the minimum and maximum available dates for historical stock data from Yahoo Finance.
-
-    :param tickers: A string or a list of strings representing the stock ticker(s).
-    :return: A pandas DataFrame with tickers as index and 'Min Date' and 'Max Date' as columns.
-             Returns an empty DataFrame if no data is found or an error occurs.
-    """
-    if isinstance(tickers, str):
-        tickers = [tickers]
-    elif not isinstance(tickers, list):
-        logger.error("Tickers must be a string or a list of strings.")
-        return pd.DataFrame()
-
-    date_ranges = {}
-
-    for ticker_symbol in tickers:
-        try:
-            ticker_obj = yf.Ticker(ticker_symbol)
-
-            hist = ticker_obj.history(period="max", auto_adjust=False)
-
-            if hist.empty:
-                logger.warning(f"No historical data found for {ticker_symbol}.")
-                date_ranges[ticker_symbol] = {'Min Date': pd.NaT, 'Max Date': pd.NaT}
-                continue
-
-            min_date = hist.index.min()
-            max_date = hist.index.max()
-
-            if isinstance(min_date, pd.Timestamp) and min_date.tzinfo is not None:
-                min_date = min_date.tz_localize(None)
-            if isinstance(max_date, pd.Timestamp) and max_date.tzinfo is not None:
-                max_date = max_date.tz_localize(None)
+      unique_values = df[column_name].unique().tolist()
+      logger.info('Returning unique values from column: ' + column_name)
+      return unique_values
 
 
-            date_ranges[ticker_symbol] = {'Min Date': min_date, 'Max Date': max_date}
-            logger.info(f"Date range for {ticker_symbol}: Min Date - {min_date.strftime('%Y-%m-%d') if pd.notna(min_date) else 'N/A'}, Max Date - {max_date.strftime('%Y-%m-%d') if pd.notna(max_date) else 'N/A'}")
+def merge_bdis(tickers: List[str], years: range = range(2014, 2025)) -> Union[pd.DataFrame, None]:
 
-        except Exception as e:
-            logger.error(f"Error fetching data for {ticker_symbol}: {e}")
-            date_ranges[ticker_symbol] = {'Min Date': pd.NaT, 'Max Date': pd.NaT}
+    full_hist_path = Path('data/full_hist.csv')
 
-    if not date_ranges:
+    if full_hist_path.exists():
+        print(f"Loading existing merged data from {full_hist_path}")
+        return pd.read_csv(
+            full_hist_path,
+            index_col='data_pregao',
+            parse_dates=True
+        )
+
+    yearly_dfs = []
+
+    for year in years:
+        file_path = Path(f'data/COTAHIST_A{year}.TXT')
+        if not file_path.exists():
+            logger.warning(f"File {file_path} does not exist. Skipping year {year}.")
+            continue
+
+        _year_data = parse_cothist(file_path)
+        if _year_data.empty or 'cod_negociacao' not in _year_data.columns:
+            logger.warning(f"No valid data in {file_path} for year {year}.")
+            continue
+
+        _year_data_filtered = _year_data[_year_data['cod_negociacao'].isin(tickers)].copy()
+
+        if _year_data_filtered.empty:
+            continue
+
+        _year_data_filtered['data_pregao'] = pd.to_datetime(
+            _year_data_filtered['data_pregao'], format='%Y%m%d'
+        )
+        
+        yearly_dfs.append(_year_data_filtered)
+
+    if not yearly_dfs:
+        logger.warning("No data found for the specified tickers and years.")
         return pd.DataFrame()
 
-    result_df = pd.DataFrame.from_dict(date_ranges, orient='index')
-    return result_df
+    concat_df = pd.concat(yearly_dfs, ignore_index=True)
 
-import pandas as pd
-from typing import Dict, Tuple, List
+    columns_to_drop = [
+        'tipo_registro', 'cod_bdi', 'nome_resumido', 'especificacao_papel',
+        'prazo_termo', 'moeda_referencia', 'preco_exercicio', 'indicador_correcao',
+        'data_vencimento', 'preco_exercicio_pontos', 'cod_isin', 'num_distribuicao',
+        'fator_cotacao'
+    ]
+    concat_df.drop(columns=columns_to_drop, inplace=True, errors='ignore')
+
+    concat_df.set_index('data_pregao', inplace=True)
+    concat_df.sort_index(inplace=True)
+
+    logger.info(f"Data merged successfully for years {years[0]} to {years[-1]}.")
+
+    logger.info(f'Saving merged data to {full_hist_path}')
+    concat_df.to_csv(full_hist_path)
+
+    return concat_df
+
+
+
+
 
 def parse_cothist(file_path: str) -> pd.DataFrame:
-    """
-    Analisa um arquivo de cotações históricas da B3 (formato COTAHIST) e o converte
-    em um DataFrame do pandas.
 
-    Args:
-        file_path: O caminho para o arquivo COTAHIST.AAAA.TXT.
 
-    Returns:
-        Um DataFrame do pandas com os dados das cotações, com tipos de dados
-        corretamente formatados.
-    """
-    # Especificação das colunas com base no layout do arquivo "REGISTRO - 01"
-    # (posição inicial, posição final)
     col_specs_and_names: Dict[str, Tuple[int, int]] = {
         'tipo_registro': (0, 2),
         'data_pregao': (2, 10),
@@ -145,40 +126,33 @@ def parse_cothist(file_path: str) -> pd.DataFrame:
         'num_distribuicao': (242, 245),
     }
 
-    # Extrai as especificações de largura e os nomes das colunas
+
     col_specs: List[Tuple[int, int]] = list(col_specs_and_names.values())
     col_names: List[str] = list(col_specs_and_names.keys())
 
     try:
-        # Lê o arquivo de largura fixa, ignorando o header e o footer
         df = pd.read_fwf(
             file_path,
             colspecs=col_specs,
             names=col_names,
-            skiprows=1,      # Pula o registro de header (tipo "00")
-            skipfooter=1,    # Pula o registro de trailer (tipo "99")
-            encoding='latin-1' # Codificação comum para esses arquivos
+            skiprows=1,
+            skipfooter=1,
+            encoding='latin-1'
         )
     except FileNotFoundError:
-        print(f"Erro: O arquivo '{file_path}' não foi encontrado.")
+        logger.error(f"File not found: {file_path}")
         return pd.DataFrame()
     except Exception as e:
-        print(f"Ocorreu um erro ao ler o arquivo: {e}")
+        logger.error(f"Error reading file: {file_path}")
         return pd.DataFrame()
 
-    # --- Limpeza e Conversão de Tipos de Dados ---
-
-    # Filtra apenas os registros de cotações (tipo "01")
     df = df[df['tipo_registro'] == 1].copy()
     df.drop('tipo_registro', axis=1, inplace=True)
 
-
-    # Converte colunas de data
     df['data_pregao'] = pd.to_datetime(df['data_pregao'], format='%Y%m%d')
-    # Para a data de vencimento, erros são convertidos para NaT (Not a Time)
+
     df['data_vencimento'] = pd.to_datetime(df['data_vencimento'], format='%Y%m%d', errors='coerce')
 
-    # Colunas que representam preços/valores com 2 casas decimais
     price_cols = [
         'preco_abertura', 'preco_maximo', 'preco_minimo', 'preco_medio',
         'preco_ultimo', 'preco_oferta_compra', 'preco_oferta_venda',
@@ -188,63 +162,21 @@ def parse_cothist(file_path: str) -> pd.DataFrame:
     for col in price_cols:
         df[col] = pd.to_numeric(df[col], errors='coerce') / 100
 
-    # Colunas que são inteiros
     integer_cols = [
         'num_negocios', 'qtd_titulos_negociados', 'fator_cotacao'
     ]
     for col in integer_cols:
         df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
 
-
-    # Colunas de texto (string) para remover espaços em branco
     string_cols = [
-        'cod_bdi', 'cod_negociacao', 'nome_resumido',
+        'cod_negociacao', 'nome_resumido',
         'especificacao_papel', 'moeda_referencia', 'cod_isin'
     ]
     for col in string_cols:
-        df[col] = df[col].str.strip()
-
-
-    print(f"Arquivo '{file_path}' processado com sucesso.")
-    print(f"Total de {len(df)} registros de cotações carregados.")
+        try:
+            df[col] = df[col].str.strip()
+        except Exception as _err:
+            print(f"Erro ao processar a coluna {col}: {_err}")
+            df[col] = pd.NA
 
     return df
-
-if __name__ == "__main__":
-    import logging
-
-    # Configura o logger
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
-
-    # Exemplo de uso
-    logger.info("Iniciando a coleta de dados de mercado...")
-
-    # df = pd.read_csv('data/FundosListados.csv')
-    #
-    # df["Codigo Negociacao"] = df["Codigo Negociacao"].astype(str) + ".SA"
-    #
-    #
-    # tickers = df['Codigo Negociacao'].tolist()
-    #
-    # date_range = get_stock_date_range(tickers)
-
-    file_to_process = 'data/COTAHIST_A2015.TXT'
-
-    try:
-
-        cota_df = parse_cothist(file_to_process)
-
-        if not cota_df.empty:
-            print("\n--- Primeiras 5 linhas do DataFrame ---")
-            print(cota_df.head())
-            print("\n--- Informações do DataFrame ---")
-            cota_df.info()
-            print("\n--- Estatísticas Descritivas ---")
-            print(cota_df.describe())
-
-    except Exception as e:
-        print(f"Não foi possível criar ou processar o arquivo de exemplo: {e}")
-
-
-    print("Stop Here")
