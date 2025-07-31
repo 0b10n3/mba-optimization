@@ -6,6 +6,8 @@ import pandas as pd
 from logger import logger
 
 
+SELIC_URL = 'https://api.bcb.gov.br/dados/serie/bcdata.sgs.4189/dados'
+
 def get_etfs_tickers(path: Path) -> Union[pd.DataFrame, None]:
     try:
         logger.info(f'Reading ETFs tickers and metadata from {str(path)}.')
@@ -204,3 +206,60 @@ def parse_cothist(file_path: str) -> pd.DataFrame:
             df[col] = pd.NA
 
     return df
+
+
+def get_selic(
+        url: str = SELIC_URL,
+        full_hist_path = Path('data/full_hist_selic.csv')
+) -> pd.DataFrame:
+
+    if full_hist_path.exists():
+        print(f'Loading existing merged data from {full_hist_path}')
+        return pd.read_csv(
+            full_hist_path, index_col='data', parse_dates=True
+        )
+
+    try:
+        logger.info(f'Retrieving SELIC data from {url}.')
+        selic_df = pd.read_json(url)
+        if selic_df.empty:
+            logger.warning('No data retrieved from SELIC API.')
+            return pd.DataFrame()
+    except Exception as _err:
+        logger.error(f'Error retrieving SELIC data: {_err}')
+        return pd.DataFrame()
+
+    selic_df['data'] = pd.to_datetime(selic_df['data'], format='%d/%m/%Y')
+    selic_df.set_index('data', inplace=True)
+    selic_df.rename(columns={'valor': 'selic'}, inplace=True)
+
+    selic_df.to_csv(full_hist_path)
+
+    return selic_df
+
+
+def merge_reference_index(merged_data, index_data: pd.DataFrame) -> pd.DataFrame:
+
+
+    index_data['fator_diario_selic'] = (1 + index_data['selic'] / 100) ** (1 / 252)
+
+
+    merged_data_reset = merged_data.reset_index()
+    selic_df_reset = index_data.reset_index()
+
+    merged_data_reset.sort_values('data_pregao', inplace=True)
+    selic_df_reset.sort_values('data', inplace=True)
+
+
+    final_df = pd.merge_asof(
+        merged_data_reset,
+        selic_df_reset[['data', 'fator_diario_selic']],
+        left_on='data_pregao',
+        right_on='data',
+        direction='backward'
+    )
+
+    final_df.set_index('data_pregao', inplace=True)
+    final_df = final_df.drop(columns='data') # Remove a coluna de data redundante
+
+    return final_df
