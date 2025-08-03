@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Dict, List, Tuple, Union
 
@@ -304,10 +305,15 @@ def get_ipca(
     return ipca_df
 
 
-def merge_reference_index(merged_data, index_data: pd.DataFrame, index_name) -> pd.DataFrame:
+def merge_reference_index(
+        merged_data,
+        index_data: pd.DataFrame,
+        index_name: str,
+        daily_factor: bool = True
+) -> pd.DataFrame:
 
-
-    index_data[f'fator_diario_{index_name}'] = (1 + index_data[index_name] / 100) ** (1 / 252)
+    if daily_factor:
+        index_data[f'fator_diario_{index_name}'] = (1 + index_data[index_name] / 100) ** (1 / 252)
 
     merged_data_reset = merged_data.reset_index()
     index_data_reset = index_data.reset_index()
@@ -324,6 +330,73 @@ def merge_reference_index(merged_data, index_data: pd.DataFrame, index_name) -> 
     )
 
     final_df.set_index('data_pregao', inplace=True)
-    final_df = final_df.drop(columns='data') # Remove a coluna de data redundante
+    final_df = final_df.drop(columns='data')
 
     return final_df
+
+
+def read_ibovespa_index(start_year=2014, end_year=2024):
+
+        all_yearly_data = []
+
+        month_map = {
+            'Jan': 1, 'Fev': 2, 'Mar': 3, 'Abr': 4, 'Mai': 5, 'Jun': 6,
+            'Jul': 7, 'Ago': 8, 'Set': 9, 'Out': 10, 'Nov': 11, 'Dez': 12
+        }
+
+        print(f"Searching for files from {start_year} to {end_year}...")
+
+        for year in range(start_year, end_year + 1):
+            filename = f'data/ibovespa_index/IBOVESPA_{year}.csv'
+
+            if not os.path.exists(filename):
+                print(f"Warning: File '{filename}' not found. Skipping.")
+                continue
+
+            try:
+                print(f"Processing '{filename}'...")
+
+                df_year = pd.read_csv(filename, sep=';', skiprows=1, index_col='Dia', encoding='latin-1')
+
+                s_unpivoted = df_year.stack()
+
+
+                df_unpivoted = s_unpivoted.reset_index()
+                df_unpivoted.columns = ['day', 'month_abbr', 'close']
+
+                df_unpivoted['month'] = df_unpivoted['month_abbr'].map(month_map)
+                df_unpivoted['year'] = year
+
+
+                df_unpivoted['data'] = pd.to_datetime(
+                    df_unpivoted[['year', 'month', 'day']],
+                    errors='coerce'
+                )
+
+                df_unpivoted.dropna(subset=['data'], inplace=True)
+
+                df_unpivoted['close'] = df_unpivoted['close'].astype(str).str.replace('.', '', regex=False).str.replace(
+                    ',', '.', regex=False).astype(float)
+
+                all_yearly_data.append(df_unpivoted[['data', 'close']])
+
+            except Exception as e:
+                print(f"An error occurred while processing {filename}: {e}")
+
+        if not all_yearly_data:
+            print("No data was processed. Returning an empty DataFrame.")
+            return pd.DataFrame(columns=['close', 'fator_diario_ibovespa'])
+
+        final_df = pd.concat(all_yearly_data, ignore_index=True)
+
+        final_df.sort_values('data', inplace=True)
+
+        final_df.set_index('data', inplace=True)
+
+        final_df['fator_diario_ibovespa'] = final_df['close'].pct_change()
+
+        return final_df
+
+
+if __name__ == '__main__':
+    read_ibovespa_index()
