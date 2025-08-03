@@ -3,8 +3,8 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Union
 
 import pandas as pd
-import httpx
-import json
+from matplotlib import pyplot as plt
+
 
 import requests
 
@@ -398,5 +398,11 @@ def read_ibovespa_index(start_year=2014, end_year=2024):
         return final_df
 
 
-if __name__ == '__main__':
-    read_ibovespa_index()
+
+def etfs_count(merged_data):
+
+    count_etfs = merged_data.groupby(level=0).size()
+    count_etfs.plot(kind='line', title='Quantidade de ETFs por Data')
+    plt.show()
+
+    return count_etfs
