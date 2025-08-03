@@ -2,11 +2,16 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Union
 
 import pandas as pd
+import httpx
+import json
+
+import requests
 
 from logger import logger
 
 
 SELIC_URL = 'https://api.bcb.gov.br/dados/serie/bcdata.sgs.4189/dados'
+IPCA_URL = "http://www.ipeadata.gov.br/api/odata4/ValoresSerie(SERCODIGO='PRECOS12_IPCA12')"
 
 def get_etfs_tickers(path: Path) -> Union[pd.DataFrame, None]:
     try:
@@ -238,22 +243,81 @@ def get_selic(
     return selic_df
 
 
-def merge_reference_index(merged_data, index_data: pd.DataFrame) -> pd.DataFrame:
+def get_ipca(
+        url: str = IPCA_URL,
+        full_hist_path: Path = Path('data/full_hist_ipca.csv')
+) -> pd.DataFrame:
+
+    if full_hist_path.exists():
+        logger.info(f'Carregando dados do IPCA do arquivo local: {full_hist_path}')
+        return pd.read_csv(
+            full_hist_path, index_col='data', parse_dates=True
+        )
+
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+
+        json_data = response.json()
+        
+        value_list = json_data.get('value')
+
+        if not value_list:
+            logger.warning('Nenhum dado retornado da API do IPCA.')
+            return pd.DataFrame()
+
+        for item in value_list:
+            item['VALDATA'] = item['VALDATA'][:10]
+
+        ipca_df = pd.DataFrame(value_list)
+
+        if ipca_df.empty:
+            logger.warning('No data retrieved from IPCA API.')
+            return pd.DataFrame()
+
+    except requests.exceptions.RequestException as _err:
+        logger.error(f'Erro ao buscar dados do IPCA: {_err}')
+        return pd.DataFrame()
+    except KeyError:
+        logger.error("Erro: key 'value' not found.")
+        return pd.DataFrame()
+
+    ipca_df = ipca_df[['VALDATA', 'VALVALOR']]
+
+    ipca_df.rename(columns={'VALDATA': 'data', 'VALVALOR': 'ipca'}, inplace=True)
+
+    ipca_df['data'] = pd.to_datetime(ipca_df['data'])
+
+    ipca_df.set_index('data', inplace=True)
+    
+    monthly_variation = ipca_df['ipca'].pct_change()
+
+    annualized_rate = (((1 + monthly_variation) ** 12) - 1) * 100
+
+    ipca_df['ipca'] = annualized_rate
+
+    ipca_df.dropna(inplace=True)
+
+    full_hist_path.parent.mkdir(parents=True, exist_ok=True)
+    ipca_df.to_csv(full_hist_path)
+
+    return ipca_df
 
 
-    index_data['fator_diario_selic'] = (1 + index_data['selic'] / 100) ** (1 / 252)
+def merge_reference_index(merged_data, index_data: pd.DataFrame, index_name) -> pd.DataFrame:
 
+
+    index_data[f'fator_diario_{index_name}'] = (1 + index_data[index_name] / 100) ** (1 / 252)
 
     merged_data_reset = merged_data.reset_index()
-    selic_df_reset = index_data.reset_index()
+    index_data_reset = index_data.reset_index()
 
     merged_data_reset.sort_values('data_pregao', inplace=True)
-    selic_df_reset.sort_values('data', inplace=True)
-
+    index_data_reset.sort_values('data', inplace=True)
 
     final_df = pd.merge_asof(
         merged_data_reset,
-        selic_df_reset[['data', 'fator_diario_selic']],
+        index_data_reset[['data', f'fator_diario_{index_name}']],
         left_on='data_pregao',
         right_on='data',
         direction='backward'
