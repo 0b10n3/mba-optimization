@@ -65,6 +65,7 @@ def merge_bdis(
             continue
 
         _year_data = parse_cothist(file_path)
+
         if _year_data.empty or 'cod_negociacao' not in _year_data.columns:
             logger.warning(f'No valid data in {file_path} for year {year}.')
             continue
@@ -206,7 +207,7 @@ def parse_cothist(file_path: str) -> pd.DataFrame:
         try:
             df[col] = df[col].str.strip()
         except Exception as _err:
-            print(f'Erro ao processar a coluna {col}: {_err}')
+            logger.error(f'Error processing {col}: {_err}')
             df[col] = pd.NA
 
     return df
@@ -216,7 +217,7 @@ def get_selic(
     url: str = SELIC_URL, full_hist_path=Path('data/full_hist_selic.csv')
 ) -> pd.DataFrame:
     if full_hist_path.exists():
-        print(f'Loading existing merged data from {full_hist_path}')
+        logger.info(f'Loading existing merged data from {full_hist_path}')
         return pd.read_csv(full_hist_path, index_col='data', parse_dates=True)
 
     try:
@@ -242,9 +243,7 @@ def get_ipca(
     url: str = IPCA_URL, full_hist_path: Path = Path('data/full_hist_ipca.csv')
 ) -> pd.DataFrame:
     if full_hist_path.exists():
-        logger.info(
-            f'Carregando dados do IPCA do arquivo local: {full_hist_path}'
-        )
+        logger.info(f'Loading existing merged data from:  {full_hist_path}')
         return pd.read_csv(full_hist_path, index_col='data', parse_dates=True)
 
     try:
@@ -256,7 +255,7 @@ def get_ipca(
         value_list = json_data.get('value')
 
         if not value_list:
-            logger.warning('Nenhum dado retornado da API do IPCA.')
+            logger.warning('No data retrieved from IPCA API.')
             return pd.DataFrame()
 
         for item in value_list:
@@ -269,7 +268,7 @@ def get_ipca(
             return pd.DataFrame()
 
     except requests.exceptions.RequestException as _err:
-        logger.error(f'Erro ao buscar dados do IPCA: {_err}')
+        logger.error(f'Error on retrieve data from IPCA API: {_err}')
         return pd.DataFrame()
     except KeyError:
         logger.error("Erro: key 'value' not found.")
@@ -348,18 +347,14 @@ def read_ibovespa_index(start_year=2014, end_year=2024):
         'Dez': 12,
     }
 
-    print(f'Searching for files from {start_year} to {end_year}...')
-
     for year in range(start_year, end_year + 1):
         filename = f'data/ibovespa_index/IBOVESPA_{year}.csv'
 
         if not os.path.exists(filename):
-            print(f"Warning: File '{filename}' not found. Skipping.")
+            logger.warning(f"Warning: File '{filename}' not found. Skipping.")
             continue
 
         try:
-            print(f"Processing '{filename}'...")
-
             df_year = pd.read_csv(
                 filename,
                 sep=';',
@@ -393,10 +388,10 @@ def read_ibovespa_index(start_year=2014, end_year=2024):
             all_yearly_data.append(df_unpivoted[['data', 'close']])
 
         except Exception as e:
-            print(f'An error occurred while processing {filename}: {e}')
+            logger.error(f'An error occurred while processing {filename}: {e}')
 
     if not all_yearly_data:
-        print('No data was processed. Returning an empty DataFrame.')
+        logger.warning('No data was processed. Returning an empty DataFrame.')
         return pd.DataFrame(columns=['close', 'fator_diario_ibovespa'])
 
     final_df = pd.concat(all_yearly_data, ignore_index=True)
