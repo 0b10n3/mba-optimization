@@ -10,7 +10,19 @@ from fn import (
     read_ibovespa_index,
 )
 
+from portfolio import (
+    DataProvider,
+    DateIterator,
+    PortfolioRebalancer
+)
+from strategies import (
+    OneOverNStrategy,
+    MarkowitzStrategy,
+    NaiveRiskParityStrategy
+)
+
 from logger import logger
+from analyzer import PerformanceAnalyzer
 
 etfs_tickers = get_etfs_tickers(path=Path('data/FundosListados.csv'))
 
@@ -29,22 +41,6 @@ merged_data = merge_reference_index(merged_data, selic_data, 'selic')
 merged_data = merge_reference_index(merged_data, ipca_data, 'ipca')
 merged_data = merge_reference_index(
     merged_data, ibovespa_index, 'ibovespa', daily_factor=False
-)
-
-
-logger.info('Stop Here')
-
-
-
-from portfolio import (
-    DataProvider,
-    DateIterator,
-    PortfolioRebalancer
-)
-from strategies import (
-    OneOverNStrategy,
-    MarkowitzStrategy,
-    NaiveRiskParityStrategy
 )
 
 
@@ -74,6 +70,37 @@ def main():
     logger.info("Starting simulation...")
     date_iterator.run()
     logger.info("\nSimulation finished.")
+
+    logger.info(f"\n--- Performance Analysis ---")
+    if not portfolio_rebalancer.generated_portfolios:
+        logger.warning("No portfolios were generated. Cannot run analysis.")
+        return
+
+    # Use a risk-free rate of 2% for Sharpe Ratio calculation
+    risk_free_rate = 0.02
+    analyzer = PerformanceAnalyzer(
+        portfolio_rebalancer.generated_portfolios,
+        data_provider,
+        risk_free_rate
+    )
+
+    # Calculate and display metrics
+    metrics_df = analyzer.calculate_metrics()
+    print("\nPerformance Metrics Summary:")
+    print(metrics_df.to_string(formatters={
+        'Total Return': '{:,.2%}'.format,
+        'Annualized Volatility': '{:,.2%}'.format,
+        'Sharpe Ratio': '{:,.2f}'.format,
+        'Sortino Ratio': '{:,.2f}'.format,
+        "Jensen's Alpha": '{:,.3f}'.format,
+        'Max Drawdown': '{:,.2%}'.format
+    }))
+
+    # Plot the results
+    print("\nGenerating comparison plots...")
+    analyzer.plot_cumulative_returns()
+
+    print("Plots generated successfully. Check the 'plots' directory.")
 
 
 if __name__ == "__main__":

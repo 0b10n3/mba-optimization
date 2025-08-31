@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 import pandas as pd
 from datetime import datetime
 
+from logger import logger
+
 
 
 @dataclass
@@ -20,7 +22,7 @@ class PortfolioStrategy(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """A user-friendly name for the strategy."""
+
         pass
 
     @abstractmethod
@@ -62,20 +64,27 @@ class Subject(ABC):
 class DataProvider:
     """
     Encapsulates the data source (DataFrame) and provides clean methods
-    to access the data required by strategies.
+    to access the data required by strategies and analysis.
     """
 
     def __init__(self, data_frame: pd.DataFrame):
-        """
-        Initializes the DataProvider.
-
-        Args:
-            data_frame: A pandas DataFrame with a datetime index and columns
-                        including 'cod_negociacao' and 'preco_ultimo'.
-        """
         if not isinstance(data_frame.index, pd.DatetimeIndex):
             raise ValueError("DataFrame index must be a DatetimeIndex.")
-        self._df = data_frame
+        self._df = data_frame.sort_index()
+
+        # Asset data processing
+        self._pivot_prices = self._df.pivot(columns='cod_negociacao', values='preco_ultimo').ffill()
+        self._daily_returns = self._pivot_prices.pct_change().dropna(how='all')
+
+        # Benchmark data processing
+        # Since factors are the same for a given day, we can group by index and take the first value.
+        daily_factors = self._df.groupby(self._df.index).first()
+        self._selic_factors = daily_factors['fator_diario_selic'].fillna(0)
+        self._ipca_factors = daily_factors['fator_diario_ipca'].fillna(0)
+        self._ibovespa_factors = daily_factors['fator_diario_ibovespa'].fillna(0) + 1.0
+
+        # Create an equal-weighted benchmark from all assets in the universe
+        self._benchmark_returns = self._daily_returns.mean(axis=1)
 
     def get_assets_for_date(self, date: datetime) -> List[str]:
         """Returns a list of unique asset codes available on a specific date."""
@@ -84,27 +93,39 @@ class DataProvider:
         return []
 
     def get_price_history(self, assets: List[str], end_date: datetime, window_days: int) -> pd.DataFrame:
-        """
-        Returns a DataFrame of historical prices for a list of assets over a
-        given lookback window.
-        """
+        """Returns a DataFrame of historical prices for a list of assets."""
         start_date = end_date - pd.Timedelta(days=window_days)
+        # Drop columns with any NaN values, as they can't be used in covariance calculations
+        return self._pivot_prices.loc[start_date:end_date, assets].dropna(axis=1, how='any')
 
-        # Filter data for the relevant date range and assets
-        history_df = self._df[
-            (self._df.index >= start_date) &
-            (self._df.index <= end_date) &
-            (self._df['cod_negociacao'].isin(assets))
-            ]
+    def get_daily_returns(self, start_date: datetime, end_date: datetime, assets: List[str]) -> pd.DataFrame:
+        """Returns a DataFrame of daily returns for a given period and assets."""
+        return self._daily_returns.loc[start_date:end_date, assets]
 
-        # Pivot to get assets as columns and dates as index
-        price_history = history_df.pivot(columns='cod_negociacao', values='preco_ultimo')
+    @property
+    def all_dates(self) -> pd.DatetimeIndex:
+        """Returns all unique dates in the data."""
+        return self._df.index.unique()
 
-        # Forward-fill to handle non-trading days and missing values
-        price_history = price_history.ffill()
+    @property
+    def benchmark_returns(self) -> pd.Series:
+        """Returns the daily returns of an equal-weighted market benchmark."""
+        return self._benchmark_returns
 
-        return price_history
+    @property
+    def selic_cumulative_returns(self) -> pd.Series:
+        """Returns the cumulative returns of the SELIC factor."""
+        return self._selic_factors.cumprod()
 
+    @property
+    def ipca_cumulative_returns(self) -> pd.Series:
+        """Returns the cumulative returns of the IPCA factor."""
+        return self._ipca_factors.cumprod()
+
+    @property
+    def ibovespa_cumulative_returns(self) -> pd.Series:
+        """Returns the cumulative returns of the IBOVESPA factor."""
+        return self._ibovespa_factors.cumprod()
 
 class DateIterator(Subject):
 
@@ -149,21 +170,21 @@ class PortfolioRebalancer(Observer):
         event_type = event_data.get('event_type')
         if event_type == 'NEW_QUARTER':
             date = event_data.get('date')
-            print(f"\n--- Rebalancing Event Triggered on {date.strftime('%Y-%m-%d')} ---")
+            logger.info(f"\n--- Rebalancing Event Triggered on {date.strftime('%Y-%m-%d')} ---")
 
             assets = self._data_provider.get_assets_for_date(date)
             if not assets:
-                print(f"No assets available on {date.strftime('%Y-%m-%d')}. Skipping.")
+                logger.info(f"No assets available on {date.strftime('%Y-%m-%d')}. Skipping.")
                 return
 
-            print(f"Available assets for allocation: {assets}")
+            logger.info(f"Available assets for allocation: {assets}")
 
             for strategy in self._strategies:
-                print(f"Calculating portfolio for strategy: '{strategy.name}'...")
+                logger.info(f"Calculating portfolio for strategy: '{strategy.name}'...")
                 try:
                     portfolio = strategy.calculate(date, assets, self._data_provider)
                     self.generated_portfolios.append(portfolio)
-                    print(f"Successfully generated portfolio for '{strategy.name}'.")
+                    logger.info(f"Successfully generated portfolio for '{strategy.name}'.")
                 except Exception as e:
-                    print(f"ERROR: Could not calculate portfolio for '{strategy.name}'. Reason: {e}")
+                    logger.error(f"ERROR: Could not calculate portfolio for '{strategy.name}'. Reason: {e}")
 
