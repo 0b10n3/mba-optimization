@@ -1,11 +1,21 @@
 from datetime import datetime
 from typing import List
 from scipy.optimize import minimize
+from dataclasses import dataclass, field
+from scipy.optimize import minimize
+from scipy.stats import norm
 
 from portfolio import Portfolio, PortfolioStrategy, DataProvider
 
 
 import numpy as np
+
+@dataclass
+class Goal:
+    """Defines a financial goal for the GoalBasedStrategy."""
+    name: str
+    threshold_return: float  # Annualized target return
+    max_failure_prob: float  # Maximum acceptable probability of not reaching the goal
 
 class OneOverNStrategy(PortfolioStrategy):
 
@@ -129,3 +139,75 @@ class NaiveRiskParityStrategy(PortfolioStrategy):
         normalized_weights = inverse_volatility / sum_inverse_vol
 
         return Portfolio(date=date, strategy_name=self.name, weights=normalized_weights.to_dict())
+
+
+class GoalBasedStrategy(PortfolioStrategy):
+    """
+    Implements Goal-Based Investing by maximizing expected return subject to
+    a maximum probability of falling below a goal's threshold.
+    This is equivalent to Telser's (1956) safety-first criterion.
+    """
+
+    def __init__(self, goal: Goal, lookback_days: int = 252):
+        self._goal = goal
+        self._lookback_days = lookback_days
+
+    @property
+    def name(self) -> str:
+        return f"Goal-Based: {self._goal.name}"
+
+    def calculate(self, date: datetime, assets: List[str], data_provider: DataProvider) -> Portfolio:
+        price_history = data_provider.get_price_history(assets, date, self._lookback_days)
+        valid_assets = price_history.columns.tolist()
+
+        if len(valid_assets) < 2:
+            raise ValueError("Not enough assets for GBI.")
+
+        log_returns = np.log(price_history / price_history.shift(1)).dropna()
+        if log_returns.empty:
+            raise ValueError("Could not compute valid returns for GBI.")
+
+        mu = log_returns.mean() * 252
+        cov_matrix = log_returns.cov() * 252
+        num_assets = len(valid_assets)
+
+        # Objective: Maximize portfolio return
+        def objective(weights):
+            return -np.sum(mu * weights)
+
+        # Constraints
+        # 1. Probability constraint: Prob(R < H) <= alpha
+        #    Assuming normality, this is equivalent to: E[R] - z * Std(R) >= H
+        #    Where z is the z-score for alpha (e.g., -1.036 for alpha=0.15)
+        z_score = norm.ppf(self._goal.max_failure_prob)
+
+        def prob_constraint(weights):
+            p_return = np.sum(mu * weights)
+            p_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+            return p_return + z_score * p_vol - self._goal.threshold_return
+
+        constraints = [
+            {'type': 'eq', 'fun': lambda weights: np.sum(weights) - 1},
+            {'type': 'ineq', 'fun': prob_constraint}
+        ]
+
+        bounds = tuple((0, 1) for _ in range(num_assets))
+        initial_weights = np.array([1. / num_assets] * num_assets)
+
+        result = minimize(
+            fun=objective,
+            x0=initial_weights,
+            method='SLSQP',
+            bounds=bounds,
+            constraints=constraints
+        )
+
+        if not result.success:
+            # Fallback if optimization fails: return an equal-weight portfolio
+            fallback_weights = {asset: 1.0 / num_assets for asset in valid_assets}
+            return Portfolio(date=date, strategy_name=self.name, weights=fallback_weights,
+                             goal_threshold=self._goal.threshold_return)
+
+        optimal_weights = dict(zip(valid_assets, result.x))
+        return Portfolio(date=date, strategy_name=self.name, weights=optimal_weights,
+                         goal_threshold=self._goal.threshold_return)

@@ -14,6 +14,7 @@ class Portfolio:
     date: datetime
     strategy_name: str
     weights: Dict[str, float] = field(default_factory=dict)
+    goal_threshold: Optional[float] = None
 
 
 class PortfolioStrategy(ABC):

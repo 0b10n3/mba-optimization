@@ -4,7 +4,10 @@ from typing import Dict, List, Tuple, Union
 
 import pandas as pd
 import requests
-from matplotlib import pyplot as plt
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import seaborn as sns
+
 
 from logger import logger
 
@@ -411,3 +414,79 @@ def etfs_count(merged_data):
     plt.show()
 
     return count_etfs
+
+
+def plot_etf_evolution(merged_data: pd.DataFrame):
+    """
+    Analyzes and plots the evolution of the number of unique ETFs over time.
+
+    Args:
+        merged_data: DataFrame with a DatetimeIndex and 'cod_negociacao' column.
+    """
+    if 'cod_negociacao' not in merged_data.columns:
+        logger.error("DataFrame must contain 'cod_negociacao' column.")
+        return
+
+    # Resample to month-end frequency ('ME'), counting unique ETFs in each month
+    monthly_etf_count = merged_data.resample('ME')['cod_negociacao'].nunique()
+
+    # --- Data Visualization using Matplotlib for broader compatibility ---
+    plt.style.use('seaborn-v0_8-whitegrid')  # Use a compatible style
+    fig, ax = plt.subplots(figsize=(14, 8))
+
+    # Plot the evolution line using ax.plot
+    ax.plot(
+        monthly_etf_count.index,
+        monthly_etf_count.values,
+        marker='o',
+        linewidth=2.5,
+        color='royalblue'
+    )
+
+    # Add annotations for start and end points for context
+    start_date = monthly_etf_count.index[0]
+    start_value = monthly_etf_count.iloc[0]
+    end_date = monthly_etf_count.index[-1]
+    end_value = monthly_etf_count.iloc[-1]
+
+    ax.annotate(
+        f'Início: {start_value}',
+        xy=(start_date, start_value),
+        xytext=(-20, 20),
+        textcoords='offset points',
+        ha='center',
+        arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2")
+    )
+    ax.annotate(
+        f'Fim: {end_value}',
+        xy=(end_date, end_value),
+        xytext=(0, -30),
+        textcoords='offset points',
+        ha='center',
+        arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2")
+    )
+
+    # --- Formatting and Aesthetics ---
+    ax.set_title(
+        'Evolução do Número de ETFs Disponíveis ao Longo do Tempo',
+        fontsize=18,
+        fontweight='bold',
+        pad=20
+    )
+    ax.set_xlabel('Ano', fontsize=12)
+    ax.set_ylabel('Quantidade de ETFs Únicos', fontsize=12)
+
+    # Ensure y-axis shows integer values
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+    plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+
+    # Add a subtle background grid
+    ax.grid(axis='y', linestyle='--', alpha=0.7)
+    ax.grid(axis='x', linestyle='--', alpha=0.2)
+
+    # Remove top and right spines for a cleaner look
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    plt.tight_layout()
+    plt.show()
